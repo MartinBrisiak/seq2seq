@@ -11,10 +11,12 @@ RUN python3 -m pip install \
                     keras
 
 RUN useradd -ms /bin/bash me
-USER me
 WORKDIR /home/me
 
-COPY fra.txt /home/me/fra.txt
-COPY dictionary.ipynb /home/me/dictionary.ipynb
+COPY sequential.ipynb /home/me/sequential.ipynb
+RUN chmod 777 /home/me/sequential.ipynb
+COPY cornell-movie-dialogs-corpus /home/me/cornell-movie-dialogs-corpus
+USER me
+
 ENTRYPOINT jupyter notebook --ip=0.0.0.0
 # --NotebookApp.token='' --NotebookApp.password=''

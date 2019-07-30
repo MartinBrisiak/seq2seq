@@ -8,8 +8,8 @@ RUN python3 -m pip install \
                     numpy==1.16.4 \
                     jupyter \
                     tensorflow==1.9 \
-                    pandas \
-                    keras
+                    keras \
+                    bokeh
 
 RUN useradd -ms /bin/bash me
 WORKDIR /home/me

@@ -1,0 +1,432 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Imports"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Using TensorFlow backend.\n"
+     ]
+    }
+   ],
+   "source": [
+    "from unicodedata import normalize\n",
+    "from pprint import pprint\n",
+    "import string\n",
+    "import re\n",
+    "from keras.models import Sequential, Model\n",
+    "from keras.layers import Dense, LSTM, CuDNNLSTM, Input, Embedding, TimeDistributed, Flatten, Dropout\n",
+    "from keras.callbacks import ModelCheckpoint\n",
+    "from keras.preprocessing.text import Tokenizer\n",
+    "from keras.preprocessing.sequence import pad_sequences\n",
+    "from keras.utils import to_categorical\n",
+    "import numpy as np"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Reading movie lines"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "{'L1044': 'they do to',\n",
+      " 'L1045': 'they do not',\n",
+      " 'L869': 'like my fear of wearing pastels',\n",
+      " 'L870': 'im kidding you know how sometimes you just become this persona and '\n",
+      "         'you dont know how to quit',\n",
+      " 'L871': 'no',\n",
+      " 'L872': 'okay youre gonna need to learn how to lie',\n",
+      " 'L924': 'wow',\n",
+      " 'L925': 'lets go',\n",
+      " 'L984': 'she okay',\n",
+      " 'L985': 'i hope so'}\n",
+      "\n",
+      "[['L194', 'L195', 'L196', 'L197'],\n",
+      " ['L198', 'L199'],\n",
+      " ['L200', 'L201', 'L202', 'L203'],\n",
+      " ['L204', 'L205', 'L206'],\n",
+      " ['L207', 'L208'],\n",
+      " ['L271', 'L272', 'L273', 'L274', 'L275'],\n",
+      " ['L276', 'L277'],\n",
+      " ['L280', 'L281'],\n",
+      " ['L363', 'L364'],\n",
+      " ['L365', 'L366']]\n"
+     ]
+    }
+   ],
+   "source": [
+    "table = str.maketrans('', '', string.punctuation)\n",
+    "# prepare regex for char filtering\n",
+    "re_print = re.compile('[^%s]' % re.escape(string.printable))\n",
+    "# prepare translation table for removing punctuation\n",
+    "table = str.maketrans('', '', string.punctuation)\n",
+    "\n",
+    "def clean_sentence(line):\n",
+    "    line = line.strip().replace('--', '').replace(\"  \", \" \").replace('\"', \"\")\n",
+    "    line = normalize('NFD', line).encode('ascii', 'ignore')\n",
+    "    line = line.decode('UTF-8')\n",
+    "    # tokenize on white space\n",
+    "    line = line.split()\n",
+    "    # convert to lowercase\n",
+    "    line = [word.lower() for word in line]\n",
+    "    # remove punctuation from each token\n",
+    "    line = [word.translate(table) for word in line]\n",
+    "    # remove non-printable chars form each token\n",
+    "    line = [re_print.sub('', w) for w in line]\n",
+    "    # remove tokens with numbers in them\n",
+    "    line = [word for word in line if word.isalpha()]\n",
+    "    return ' '.join(line)\n",
+    "\n",
+    "with open('./cornell-movie-dialogs-corpus/movie_lines.txt', 'r', errors='ignore') as f:\n",
+    "    lines_as_list = [row.strip() for row in f.readlines()]\n",
+    "\n",
+    "\n",
+    "lines = {}\n",
+    "for line in lines_as_list:\n",
+    "    lines[\n",
+    "        line.split('+++$+++')[0].strip()\n",
+    "    ] = clean_sentence(line.split('+++$+++')[-1])  # clean sentences\n",
+    "\n",
+    "del lines_as_list\n",
+    "\n",
+    "with open('./cornell-movie-dialogs-corpus/movie_conversations.txt', 'r', errors='ignore') as f:\n",
+    "    conversations = [row.strip() for row in f.readlines()]\n",
+    "\n",
+    "# only take id's and convert list as string to list as list\n",
+    "conversations = [\n",
+    "    conversation.split('+++$+++')[-1].strip().replace('[', '').replace(']', '').replace(\"'\", '').replace(\" \", '').split(',') \n",
+    "    for conversation in conversations\n",
+    "]\n",
+    "\n",
+    "pprint({k: lines[k] for k in list(lines)[:10]})\n",
+    "print()\n",
+    "pprint(conversations[:10])\n",
+    "\n",
+    "assert len([conversation for conversation in conversations if len(conversation) <=1]) == 0\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# map keys to line"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[['yeah', 'what do you think'],\n",
+      " ['two legs nice rack',\n",
+      "  'yeah whatever i want you to go out with her',\n",
+      "  'sure sparky ill get right on it',\n",
+      "  'you just said',\n",
+      "  'you need money to take a girl out',\n",
+      "  'but youd go out with her if you had the cake'],\n",
+      " ['you got it verona i pick up the tab you do the honors',\n",
+      "  'youre gonna pay me to take out some girl',\n",
+      "  'i cant date her sister until that one gets a boyfriend and thats the catch '\n",
+      "  'she doesnt want a boyfriend',\n",
+      "  'how much'],\n",
+      " ['i cant take a girl like that out on twenty bucks', 'fine thirty'],\n",
+      " ['take it or leave it this isnt a negotiation',\n",
+      "  'fifty and youve got your man'],\n",
+      " ['when i shell out fifty i expect results',\n",
+      "  'im on it',\n",
+      "  'watching the bitch trash my car doesnt count as a date',\n",
+      "  'i got her under control she just acts crazed in public to keep up the '\n",
+      "  'image'],\n",
+      " ['i just upped my price',\n",
+      "  'what',\n",
+      "  'a hundred bucks a date',\n",
+      "  'forget it',\n",
+      "  'forget her sister then'],\n",
+      " ['its about time', 'a deals a deal'],\n",
+      " ['howd you do it', 'do what', 'get her to act like a human'],\n",
+      " ['i dont know dorsey the limothe flowers another hundred for the tux',\n",
+      "  'enough with the barbie n ken shit i know']]\n"
+     ]
+    }
+   ],
+   "source": [
+    "conversations_with_lines = []\n",
+    "for conversation in conversations:\n",
+    "    conversations_with_lines.append([lines[key] for key in conversation])\n",
+    "    \n",
+    "pprint(conversations_with_lines[100:110])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Pair those things"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "array(['can we make this quick roxanne korrine and andrew barrett are having an incredibly horrendous public break up on the quad again',\n",
+      "       'well i thought wed start with pronunciation if thats okay with you'],\n",
+      "      dtype='<U2857')\n",
+      "array(['well i thought wed start with pronunciation if thats okay with you',\n",
+      "       'not the hacking and gagging and spitting part please'],\n",
+      "      dtype='<U2857')\n",
+      "array(['not the hacking and gagging and spitting part please',\n",
+      "       'okay then how bout we try out some french cuisine saturday night'],\n",
+      "      dtype='<U2857')\n",
+      "array(['youre asking me out thats so cute whats your name again',\n",
+      "       'forget it'], dtype='<U2857')\n",
+      "array(['no no its my fault we didnt have a proper introduction',\n",
+      "       'cameron'], dtype='<U2857')\n",
+      "array(['cameron',\n",
+      "       'the thing is cameron im at the mercy of a particularly hideous breed of loser my sister i cant date until she does'],\n",
+      "      dtype='<U2857')\n",
+      "array(['the thing is cameron im at the mercy of a particularly hideous breed of loser my sister i cant date until she does',\n",
+      "       'seems like she could get a date easy enough'], dtype='<U2857')\n",
+      "array(['why',\n",
+      "       'unsolved mystery she used to be really popular when she started high school then it was just like she got sick of it or something'],\n",
+      "      dtype='<U2857')\n",
+      "array(['unsolved mystery she used to be really popular when she started high school then it was just like she got sick of it or something',\n",
+      "       'thats a shame'], dtype='<U2857')\n",
+      "array(['gosh if only we could find kat a boyfriend',\n",
+      "       'let me see what i can do'], dtype='<U2857')\n"
+     ]
+    }
+   ],
+   "source": [
+    "def pair_it(my_list):\n",
+    "    pairs = []\n",
+    "    for i in range(len(my_list) -1):\n",
+    "        pairs.append([my_list[i], my_list[i + 1]])\n",
+    "    return pairs\n",
+    "\n",
+    "paired_conversations_agg = [\n",
+    "    pair_it(conversation) for conversation in conversations_with_lines\n",
+    "]\n",
+    "conversations_pairs = np.array([item for sublist in paired_conversations_agg for item in sublist])\n",
+    "for i in range(10):\n",
+    "    pprint(conversations_pairs[i])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Tokenize"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "left Vocabulary Size: 53802\n",
+      "left Max Length: 313\n",
+      "right Vocabulary Size: 54617\n",
+      "right Max Length: 552\n"
+     ]
+    }
+   ],
+   "source": [
+    "# fit a tokenizer\n",
+    "def create_tokenizer(lines):\n",
+    "    tokenizer = Tokenizer()\n",
+    "    tokenizer.fit_on_texts(lines)\n",
+    "    return tokenizer\n",
+    "\n",
+    "# max sentence length\n",
+    "def max_length(lines):\n",
+    "    return max(len(line.split()) for line in lines)\n",
+    "\n",
+    "# prepare left tokenizer\n",
+    "left_tokenizer = create_tokenizer(conversations_pairs[:, 0])\n",
+    "left_vocab_size = len(left_tokenizer.word_index) + 1\n",
+    "left_length = max_length(conversations_pairs[:, 0])\n",
+    "\n",
+    "print('left Vocabulary Size: %d' % left_vocab_size)\n",
+    "print('left Max Length: %d' % (left_length))\n",
+    "# prepare german tokenizer\n",
+    "right_tokenizer = create_tokenizer(conversations_pairs[:, 1])\n",
+    "right_vocab_size = len(right_tokenizer.word_index) + 1\n",
+    "right_length = max_length(conversations_pairs[:, 1])\n",
+    "print('right Vocabulary Size: %d' % right_vocab_size)\n",
+    "print('right Max Length: %d' % (right_length))\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Split"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "split index 221616\n"
+     ]
+    }
+   ],
+   "source": [
+    "print(\"split index {}\".format(len(conversations_pairs)))\n",
+    "split_index = int(len(conversations_pairs) * .8)\n",
+    "train, test = conversations_pairs[:split_index], conversations_pairs[split_index:]"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Encode"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# encode and pad sequences\n",
+    "def encode_sequences(tokenizer, length, lines):\n",
+    "    # integer encode sequences\n",
+    "    X = tokenizer.texts_to_sequences(lines)\n",
+    "    # pad sequences with 0 values\n",
+    "    X = pad_sequences(X, maxlen=length, padding='post')\n",
+    "    return X\n",
+    "\n",
+    "# one hot encode target sequence\n",
+    "def encode_output(sequences, vocab_size):\n",
+    "    ylist = list()\n",
+    "    return np.array([\n",
+    "        to_categorical(sequence, num_classes=vocab_size) for sequence in sequences\n",
+    "    ]).reshape(sequences.shape[0], sequences.shape[1], vocab_size)\n",
+    "#     for sequence in sequences:\n",
+    "#         encoded = to_categorical(sequence, num_classes=vocab_size)\n",
+    "#         ylist.append(encoded)\n",
+    "#     y = array(ylist)\n",
+    "#     y = y.reshape(sequences.shape[0], sequences.shape[1], vocab_size)\n",
+    "#     return y\n",
+    "\n",
+    "# prepare training data\n",
+    "trainX = encode_sequences(right_tokenizer, right_length, train[:, 1])\n",
+    "trainY = encode_sequences(left_tokenizer, left_length, train[:, 0])\n",
+    "trainY = encode_output(trainY, left_vocab_size)\n",
+    "# prepare validation data\n",
+    "testX = encode_sequences(right_tokenizer, right_length, test[:, 1])\n",
+    "testY = encode_sequences(left_tokenizer, left_length, test[:, 0])\n",
+    "testY = encode_output(testY, left_vocab_size)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Define Model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "n_units=256\n",
+    "model = Sequential()\n",
+    "model.add(Embedding(src_vocab, n_units, input_length=src_timesteps, mask_zero=True))\n",
+    "model.add(LSTM(n_units))\n",
+    "model.add(RepeatVector(tar_timesteps))\n",
+    "model.add(LSTM(n_units, return_sequences=True))\n",
+    "model.add(TimeDistributed(Dense(tar_vocab, activation='softmax')))\n",
+    "\n",
+    "model = define_model(ger_vocab_size, eng_vocab_size, ger_length, eng_length, 256)\n",
+    "model.compile(optimizer='adam', loss='categorical_crossentropy')\n",
+    "# summarize defined model\n",
+    "print(model.summary())"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Training"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# fit model\n",
+    "filename = 'model.h5'\n",
+    "checkpoint = ModelCheckpoint(filename, monitor='val_loss', verbose=1, save_best_only=True, mode='min')\n",
+    "model.fit(trainX, trainY, epochs=30, batch_size=64, validation_data=(testX, testY), callbacks=[checkpoint], verbose=2)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.6.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}

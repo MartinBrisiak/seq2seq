@@ -17,6 +17,7 @@ WORKDIR /home/me
 COPY sequential.ipynb /home/me/sequential.ipynb
 RUN chmod 777 /home/me/sequential.ipynb
 COPY cornell-movie-dialogs-corpus /home/me/cornell-movie-dialogs-corpus
+RUN chmod 777 -R /home/me/cornell-movie-dialogs-corpus
 USER me
 # port 8888
 ENTRYPOINT jupyter notebook --ip=0.0.0.0

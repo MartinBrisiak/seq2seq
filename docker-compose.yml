@@ -1,0 +1,10 @@
+version: "2.3"
+services:
+  nvidia:
+    image: seq2seq
+    container_name: seq2seq
+    runtime: nvidia
+    ports:
+      - 8888:8888
+    volumes:
+      - ./mount-me:/home/me/mount-this

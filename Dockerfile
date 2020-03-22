@@ -1,4 +1,4 @@
-FROM ubuntu:16.04
+FROM nvidia/cuda:10.0-cudnn7-devel-ubuntu16.04
 
 RUN apt-get update && \
     apt-get upgrade -y && \
@@ -6,17 +6,19 @@ RUN apt-get update && \
 
 RUN python3 -m pip install --upgrade pip==9.0.1
 RUN python3 -m pip install \
-                    numpy==1.16.4 \
+                    tensorflow-gpu==1.14 \
+                    "numpy<1.17" \
                     jupyter \
-                    tensorflow==1.9 \
-                    keras \
-                    matplotlib
+                    matplotlib \
+                    tqdm
 
 RUN useradd -ms /bin/bash me
 WORKDIR /home/me
 
 COPY sequential.ipynb /home/me/sequential.ipynb
+COPY seq2seq.ipynb /home/me/seq2seq.ipynb
 RUN chmod 777 /home/me/sequential.ipynb
+RUN chmod 777 /home/me/seq2seq.ipynb
 COPY cornell-movie-dialogs-corpus /home/me/cornell-movie-dialogs-corpus
 RUN chmod 777 -R /home/me/cornell-movie-dialogs-corpus
 USER me
